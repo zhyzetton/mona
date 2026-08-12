@@ -2,5 +2,5 @@ use crate::app::{AppState, Message};
 use iced::widget::container;
 
 pub fn view(state: &AppState) -> iced::Element<'_, Message> {
-    container("Settings").into()
+    container("Settings").padding(8).into()
 }
