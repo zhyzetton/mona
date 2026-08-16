@@ -1,7 +1,7 @@
 use crate::components::{header, sider};
 use crate::pages::{home, library, settings};
-use iced::Length;
 use iced::widget::{column, container, row};
+use iced::{Color, Length};
 use std::path::PathBuf;
 
 pub struct FileItem {
@@ -73,6 +73,13 @@ fn view(app_state: &AppState) -> iced::Element<'_, Message> {
     container(
         row![
             sider::view(&app_state),
+            container("")
+                .width(1)
+                .height(Length::Fill)
+                .style(|_theme| container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgb8(238, 238, 239))),
+                    ..Default::default()
+                }),
             column![
                 header::view(app_state),
                 match app_state.current_page {
