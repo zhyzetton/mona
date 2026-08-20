@@ -1,5 +1,6 @@
+#[derive(Debug, Clone)]
 pub struct Media {
-    pub id: i64,
+    pub id: Option<i64>,
     pub title: String,
     pub year: Option<i32>,
     pub overview: Option<String>,
@@ -16,4 +17,25 @@ pub enum MediaType {
     Series,
     Anime,
     Personal,
+}
+
+impl MediaType {
+    pub fn to_i64(self) -> i64 {
+        match self {
+            MediaType::Movie => 0,
+            MediaType::Series => 1,
+            MediaType::Anime => 2,
+            MediaType::Personal => 3,
+        }
+    }
+
+    pub fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Movie),
+            1 => Some(Self::Series),
+            2 => Some(Self::Anime),
+            3 => Some(Self::Personal),
+            _ => None,
+        }
+    }
 }
