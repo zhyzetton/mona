@@ -9,14 +9,16 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS media (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
-            year INTEGER,
+            year TEXT,
             overview TEXT,
             media_type INTEGER NOT NULL,
+            duration TEXT,
             rating REAL,
             actors TEXT,
             poster_path TEXT,
             file_path TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_media_file_path ON media(file_path);
             "#,
     )?;
     Ok(())

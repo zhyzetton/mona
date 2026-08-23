@@ -2,9 +2,10 @@
 pub struct Media {
     pub id: Option<i64>,
     pub title: String,
-    pub year: Option<i32>,
+    pub year: Option<String>,
     pub overview: Option<String>,
     pub media_type: MediaType,
+    pub duration: Option<String>,
     pub rating: Option<f32>,
     pub actors: Vec<String>,
     pub poster_path: Option<String>,

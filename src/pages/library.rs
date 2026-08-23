@@ -1,19 +1,26 @@
 use crate::app::{AppState, Message};
 use crate::components::card;
-use iced::widget::grid;
-use iced::{
-    Length,
-    widget::{column, container, text},
-};
+use iced::Length;
+use iced::widget::{column, container, grid, scrollable, text};
+use crate::pages::video_detail;
 
 pub fn view(state: &AppState) -> iced::Element<'_, Message> {
-    let files_card = state
-        .files
+
+    let cards = state
+        .medias
         .iter()
-        .map(|f| card::view(&f.name, &f.path.to_str().unwrap()))
+        .map(|m| {
+            let year = m.year.as_deref().unwrap_or("");
+            card::view(m.id.unwrap(), &m.title, &year, m.poster_path.as_deref())
+        })
         .collect::<Vec<_>>();
-    container(column![text!("资源库"), grid(files_card).spacing(16)])
+    let content = if state.selected_id.is_some() {
+        video_detail::view(state)
+    } else {
+        grid(cards).spacing(16).into()
+    };
+
+    container(scrollable(column![content]).height(Length::Fill).width(Length::Fill))
         .padding(8)
-        .width(Length::Fill)
         .into()
 }
