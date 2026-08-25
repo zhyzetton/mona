@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result};
 use crate::media::model::{Media, MediaType};
+use rusqlite::{Connection, Result, Transaction, params};
 
 pub fn insert_media(conn: &Connection, media: &Media) -> Result<()> {
     conn.execute(
@@ -26,13 +26,14 @@ pub fn insert_media(conn: &Connection, media: &Media) -> Result<()> {
             serde_json::to_string(&media.actors).unwrap(),
             &media.poster_path,
             &media.file_path,
-            )
+        ),
     )?;
     Ok(())
 }
 
 pub fn find_all(conn: &Connection) -> Result<Vec<Media>> {
-    let mut stmt = conn.prepare("SELECT \
+    let mut stmt = conn.prepare(
+        "SELECT \
     id,\
     title,\
     year,\
@@ -43,7 +44,8 @@ pub fn find_all(conn: &Connection) -> Result<Vec<Media>> {
     actors,\
     poster_path,\
     file_path \
-    FROM media")?;
+    FROM media",
+    )?;
     let rows = stmt.query_map([], |row| {
         let media_type_value: i64 = row.get(4)?;
         let media_type = MediaType::from_i64(media_type_value).ok_or_else(|| {
@@ -54,9 +56,8 @@ pub fn find_all(conn: &Connection) -> Result<Vec<Media>> {
             )
         })?;
         let actors_json: String = row.get(7)?;
-        let actors: Vec<String> = serde_json::from_str(&actors_json).map_err(|_| {
-            rusqlite::Error::InvalidQuery
-        })?;
+        let actors: Vec<String> =
+            serde_json::from_str(&actors_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
 
         Ok(Media {
             id: row.get(0)?,
@@ -86,4 +87,31 @@ pub fn update_poster(conn: &Connection, id: i64, poster_path: &str) -> Result<()
         params![poster_path, id],
     )?;
     Ok(())
+}
+
+pub fn get_all_paths(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT file_path FROM media")?;
+    let paths = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>>>()?;
+    Ok(paths)
+}
+
+pub fn insert_media_with_tx(tx: &Transaction, media: &Media) -> Result<i64> {
+    tx.execute(
+        "INSERT INTO media (title, year, overview, media_type, duration, rating, \
+         actors, poster_path, file_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            &media.title,
+            &media.year,
+            &media.overview,
+            media.media_type.to_i64(),
+            &media.duration,
+            &media.rating,
+            serde_json::to_string(&media.actors).unwrap(),
+            &media.poster_path,
+            &media.file_path,
+        ),
+    )?;
+    Ok(tx.last_insert_rowid())
 }

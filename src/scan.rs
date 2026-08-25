@@ -1,17 +1,19 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use image::GenericImageView;
-use image::imageops::FilterType;
-use walkdir::WalkDir;
-use crate::{config, database, scan};
-use crate::app::AppState;
+use std::collections::HashSet;
 use crate::database::repository;
 use crate::media::model::{Media, MediaType};
+use crate::{config, database};
+use image::GenericImageView;
+use image::imageops::FilterType;
+use nom_exif::{TrackInfoTag, read_track};
+use rayon::prelude::*;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "ts"];
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
-pub fn scan_videos(root: &Path) -> Vec<PathBuf> {
+pub fn scan_videos(root: &Path) -> HashSet<PathBuf> {
     WalkDir::new(root)
         .into_iter()
         .filter_map(|entry| entry.ok())
@@ -22,7 +24,8 @@ pub fn scan_videos(root: &Path) -> Vec<PathBuf> {
                 .and_then(|ext| ext.to_str())
                 .map(|ext| VIDEO_EXTS.contains(&ext.to_lowercase().as_str()))
                 .unwrap_or(false)
-        }).collect()
+        })
+        .collect()
 }
 
 pub fn find_poster(video_path: &Path) -> Option<PathBuf> {
@@ -37,17 +40,32 @@ pub fn find_poster(video_path: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn make_thumbnail(src: &Path, dest: &Path) -> Result<(), image::ImageError> {
+fn hash_path(path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+// 以源路径 hash 为文件名
+pub fn make_thumbnail(src: &Path) -> Result<PathBuf, image::ImageError> {
+    let hash = hash_path(src);
+    let dest_dir = config::posters_dir();
+    std::fs::create_dir_all(&dest_dir)?;
+    let dest = dest_dir.join(format!("{}.jpg", hash));
+    if dest.exists() {
+        return Ok(dest);
+    }
     let img = image::open(src)?;
     let (w, h) = img.dimensions();
     let scale = 300.0 / h as f32;
     let new_w = (w as f32 * scale).round() as u32;
     let scaled = img.resize(new_w, 300, FilterType::Lanczos3);
-    scaled.save(dest)
+    scaled.save(&dest)?;
+    Ok(dest)
 }
 
-pub async  fn scan_job(dirs: Vec<PathBuf>) -> i64 {
-    let conn = match database::connection::open() {
+pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
+    let mut conn = match database::connection::open() {
         Ok(c) => c,
         Err(e) => {
             println!("打开数据库失败：{e}");
@@ -55,20 +73,40 @@ pub async  fn scan_job(dirs: Vec<PathBuf>) -> i64 {
         }
     };
     let _ = database::init(&conn);
-    let mut added = 0;
-
-    for dir in dirs {
-        for path in scan::scan_videos(&dir) {
+    let existing_paths: Vec<String> = repository::get_all_paths(&conn)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let all_video_paths: Vec<PathBuf> =
+        dirs.into_iter().flat_map(|dir| scan_videos(&dir)).collect();
+    if all_video_paths.is_empty() {
+        return 0;
+    }
+    // 并行处理每个视频
+    let results: Vec<Media> = all_video_paths
+        .par_iter()
+        .filter_map(|path| {
             let file_path = path.to_string_lossy().to_string();
-            if repository::exists_by_path(&conn, &file_path).unwrap_or(false) {
-                continue;
+            if existing_paths.contains(&file_path) {
+                return None;
             }
             let title = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .replace('_', " ");
-            let duration = get_duration(&path);
+            let duration = get_duration(path);
+            let poster_path = if let Some(src) = find_poster(path) {
+                match make_thumbnail(&src) {
+                    Ok(dest) => Some(dest.to_string_lossy().to_string()),
+                    Err(e) => {
+                        eprintln!("生成缩略图失败 {}: {e}", src.display());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let media = Media {
                 id: None,
                 title,
@@ -78,37 +116,54 @@ pub async  fn scan_job(dirs: Vec<PathBuf>) -> i64 {
                 duration,
                 rating: None,
                 actors: vec![],
-                poster_path: None,
+                poster_path,
                 file_path,
             };
-            if repository::insert_media(&conn, &media).is_ok() {
-                // 封面
-                if let Some(src) = scan::find_poster(&path) {
-                    let id = conn.last_insert_rowid();
-                    let _ = fs::create_dir_all(config::posters_dir());
-                    let ext = src.extension().unwrap_or_default().to_string_lossy();
-                    let dest = config::posters_dir().join(format!("{id}.jpg"));
-                    if scan::make_thumbnail(&src, &dest).is_ok() {
-                        repository::update_poster(&conn, id, &dest.to_string_lossy())
-                            .unwrap_or_default()
-                    }
-                }
-                added +=1;
-            }
+            Some(media)
+        })
+        .collect();
+    if results.is_empty() {
+        return 0;
+    }
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("开启事务失败");
+            return 0;
         }
+    };
+    let mut added = 0;
+    for media in results {
+        if repository::insert_media_with_tx(&tx, &media).is_ok() {
+            added += 1;
+        } else {
+            eprintln!("插入失败");
+        }
+    }
+    if let Err(e) = tx.commit() {
+        eprintln!("提交事务失败: {e}");
+        return 0;
     }
     added
 }
 
 fn get_duration(path: &Path) -> Option<String> {
-    let output = std::process::Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
-        .arg(path)
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&output.stdout);
-    let mut seconds = s.trim().parse::<f64>().ok().map(|m| m as i64)?;
-    seconds = seconds.max(0);
+    let track_info = match read_track(path) {
+        Ok(info) => info,
+        Err(e) => {
+            eprintln!("读取文件元数据失败 {}: {}", path.display(), e);
+            return None;
+        }
+    };
+    let duration_ms: Option<u64> = match track_info.get(TrackInfoTag::DurationMs) {
+        None => {
+            eprintln!("文件 {} 中未找到时长信息", path.display());
+            return None;
+        }
+        Some(v) => v.as_u64(),
+    };
+
+    let seconds = duration_ms.unwrap_or(0) / 1000;
     let h = seconds / 3600;
     let m = (seconds % 3600) / 60;
     let s = seconds % 60;
