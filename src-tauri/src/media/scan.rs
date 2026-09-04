@@ -1,4 +1,5 @@
 use crate::database::repository;
+use crate::errors::AppError;
 use crate::media::model::{Media, MediaType};
 use crate::{config, database};
 use image::imageops::FilterType;
@@ -17,7 +18,7 @@ const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 struct MetaInfo {
     pub duration: String,
     pub resolution: i32,
-    pub file_size: String
+    pub file_size: String,
 }
 
 pub fn scan_videos(root: &Path) -> HashSet<PathBuf> {
@@ -54,13 +55,15 @@ fn hash_path(path: &Path) -> String {
 }
 
 // 以源路径 hash 为文件名
-pub fn make_thumbnail(src: &Path) -> Result<(PathBuf, PathBuf), image::ImageError> {
+pub fn make_thumbnail(src: &Path) -> Result<(PathBuf, PathBuf), AppError> {
     let hash = hash_path(src);
 
-    let poster_dir = config::posters_dir();
-    let detail_img_dir = config::detail_img_dir();
-    std::fs::create_dir_all(&poster_dir)?;
-    std::fs::create_dir_all(&detail_img_dir)?;
+    let poster_dir = config::posters_dir()
+        .ok_or_else(|| AppError::FileOperation("打开海报路径失败".to_string()))?;
+    let detail_img_dir = config::detail_img_dir()
+        .ok_or_else(|| AppError::FileOperation("打开详情路径失败".to_string()))?;
+    fs::create_dir_all(&poster_dir).map_err(|e| AppError::CreateFile(e.to_string()))?;
+    fs::create_dir_all(&detail_img_dir).map_err(|e| AppError::CreateFile(e.to_string()))?;
 
     let poster_dest = poster_dir.join(format!("{}.jpg", hash));
     let detail_ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
@@ -68,20 +71,24 @@ pub fn make_thumbnail(src: &Path) -> Result<(PathBuf, PathBuf), image::ImageErro
     if poster_dest.exists() && detail_dest.exists() {
         return Ok((poster_dest, detail_dest));
     }
-    let img = image::open(src)?;
+    let img =
+        image::open(src).map_err(|e| AppError::FileOperation(format!("打开路径失败: {e}")))?;
     let (w, h) = img.dimensions();
     let scale = 300.0 / h as f32;
     let new_w = (w as f32 * scale).round() as u32;
     let scaled = img.resize(new_w, 300, FilterType::Lanczos3);
-    scaled.save(&poster_dest)?;
-    fs::copy(src, &detail_dest)?;
+    scaled
+        .save(&poster_dest)
+        .map_err(|e| AppError::FileOperation(format!("保存缩略图失败: {e}")))?;
+    fs::copy(src, &detail_dest)
+        .map_err(|e| AppError::FileOperation(format!("复制图片失败: {e}")))?;
     Ok((poster_dest, detail_dest))
 }
 
 fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;        // 1,048,576
-    const GB: u64 = MB * 1024;        // 1,073,741,824
+    const MB: u64 = KB * 1024; // 1,048,576
+    const GB: u64 = MB * 1024; // 1,073,741,824
 
     if bytes <= GB {
         // 不超过 1G → 显示 MB
@@ -94,16 +101,10 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
-    let result = tokio::task::spawn_blocking(move || {
-        // 1. 打开数据库（同步阻塞，但现在在阻塞线程池中执行）
-        let mut conn = match database::connection::open() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("打开数据库失败：{e}");
-                return 0;
-            }
-        };
+pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
+    let result = tokio::task::spawn_blocking(move || -> Result<i32, AppError> {
+        // 1. 打开数据库
+        let mut conn = database::connection::open()?;
 
         // 2. 获取已存在的路径，使用 HashSet 加速查找
         let existing_paths: HashSet<String> = repository::get_all_paths(&conn)
@@ -116,7 +117,7 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
             dirs.into_iter().flat_map(|dir| scan_videos(&dir)).collect();
 
         if all_video_paths.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         // 4. Rayon 并行处理
@@ -135,9 +136,13 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
                     .replace('_', " ");
                 // 获取元数据失败就跳过
                 let metainfo = match get_metainfo(path) {
-                    Some(m) => m,
-                    None => return None
+                    Ok(metainfo) => metainfo,
+                    Err(e) => {
+                        eprintln!("获取元数据失败: {} -> {}", path.display(), e.to_string());
+                        return None
+                    }
                 };
+
                 let duration = metainfo.duration;
                 let file_size = metainfo.file_size;
 
@@ -169,13 +174,13 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
                     detail_img_path: detail_path,
                     file_path,
                     file_size,
-                    resolution: metainfo.resolution
+                    resolution: metainfo.resolution,
                 })
             })
             .collect();
 
         if results.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         // 5. 事务插入（仍在阻塞线程中）
@@ -183,7 +188,7 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("开启事务失败: {e}");
-                return 0;
+                return Ok(0);
             }
         };
         let mut added = 0;
@@ -196,34 +201,24 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> i64 {
         }
         if let Err(e) = tx.commit() {
             eprintln!("提交事务失败: {e}");
-            return 0;
+            return Ok(0);
         }
-        added
+        Ok(added)
     })
-    .await; // 等待阻塞任务完成
+    .await.map_err(|e|  AppError::Scan(e.to_string()));
 
-    // 处理可能的 panic 或取消
-    result.unwrap_or_else(|e| {
-        eprintln!("扫描任务 panic 或取消: {e}");
-        0
-    })
+    result?
 }
 
-fn get_metainfo(path: &Path) -> Option<MetaInfo> {
-    let track_info = match read_track(path) {
-        Ok(info) => info,
-        Err(e) => {
-            eprintln!("读取文件元数据失败 {}: {}", path.display(), e);
-            return None;
-        }
-    };
-    let duration_ms: Option<u64> = match track_info.get(TrackInfoTag::DurationMs) {
-        None => {
-            eprintln!("文件 {} 中未找到时长信息", path.display());
-            return None;
-        }
-        Some(v) => v.as_u64(),
-    };
+fn get_metainfo(path: &Path) -> Result<MetaInfo, AppError> {
+    let track_info = read_track(path)
+        .map_err(|e| AppError::FileOperation(format!("读取文件元数据失败: {} -> {}", path.display(), e.to_string())))?;
+    let duration_ms = track_info
+        .get(TrackInfoTag::DurationMs)
+        .and_then(|v| v.as_u64());
+    if duration_ms.is_none() {
+        eprintln!("文件 {} 中未找到时长信息", path.display())
+    }
 
     let seconds = duration_ms.unwrap_or(0) / 1000;
     let h = seconds / 3600;
@@ -231,19 +226,17 @@ fn get_metainfo(path: &Path) -> Option<MetaInfo> {
     let s = seconds % 60;
     let duration = format!("{:02}:{:02}:{:02}", h, m, s);
 
-    let h: Option<u32> = match track_info.get(TrackInfoTag::Height) {
-        None => {
-            eprintln!("文件 {} 中未找到高度信息", path.display());
-            None
-        }
-        Some(v) => v.as_u32()
-    };
+    let height = track_info
+        .get(TrackInfoTag::Height)
+        .and_then(|v| v.as_u32());
+    if height.is_none() {
+        eprintln!("文件 {} 未找到高度信息", path.display());
+    }
     let file_size_byte = fs::metadata(path).ok().map(|m| m.len());
     let file_size = format_bytes(file_size_byte.unwrap_or(0_u64));
-    Some(MetaInfo {
+    Ok(MetaInfo {
         duration,
-        resolution: h.unwrap_or(0_u32) as i32,
-        file_size
+        resolution: height.unwrap_or(0_u32) as i32,
+        file_size,
     })
 }
-

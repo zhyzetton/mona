@@ -31,3 +31,4 @@ rayon = "1.7"
 image = {version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 dirs = "6"
 tokio = { version = "1", features = ["full"] }
+thiserror = "2.0"

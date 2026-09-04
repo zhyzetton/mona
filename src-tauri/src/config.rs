@@ -36,22 +36,19 @@ impl Config {
     }
 }
 
-pub fn posters_dir() -> PathBuf {
+pub fn posters_dir() -> Option<PathBuf> {
     dirs::home_dir()
         .map(|home| home.join(".mona").join("posters"))
-        .unwrap_or_default()
 }
 
-pub fn detail_img_dir() -> PathBuf {
+pub fn detail_img_dir() -> Option<PathBuf> {
     dirs::home_dir()
         .map(|home| home.join(".mona").join("detail_imgs"))
-        .unwrap_or_default()
 }
 
-pub fn db_path() -> PathBuf {
+pub fn db_path() -> Option<PathBuf> {
     dirs::home_dir()
         .map(|home| home.join(".mona").join("library.db"))
-        .unwrap()
 }
 
 fn config_file_path() -> Option<PathBuf> {

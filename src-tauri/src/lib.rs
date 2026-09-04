@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::media::model::Media;
-use tauri::Manager;
+use tauri::{App, Manager};
+use crate::errors::AppError;
 
 pub mod config;
 pub mod database;
 pub mod media;
+pub mod errors;
 
 #[tauri::command]
 fn get_videos() -> Result<Vec<Media>, String> {
@@ -13,8 +15,8 @@ fn get_videos() -> Result<Vec<Media>, String> {
 }
 
 #[tauri::command]
-async fn scan_videos() -> i64 {
-    let config_map = config::Config::load();
+async fn scan_videos() -> Result<i32, AppError> {
+    let config_map = Config::load();
     let video_path = config_map.local_dirs;
     let result_count = media::scan::scan_job(video_path).await;
     result_count
@@ -58,7 +60,7 @@ pub fn run() {
             database::init(&conn)?;
             // 将视频目录加入 asset protocol 允许范围
             let scope = app.asset_protocol_scope();
-            for dir in config::Config::load().local_dirs {
+            for dir in Config::load().local_dirs {
                 let _ = scope.allow_directory(&dir, true);
             }
             Ok(())
