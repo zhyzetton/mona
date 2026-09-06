@@ -1,10 +1,25 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>Mona</title>
+    <style>
+      /* 首帧底色:与 App.css 的令牌一致,避免启动闪白/闪黑 */
+      :root { --c-base: #0b0c10; }
+      [data-theme="light"] { --c-base: #f3f4f6; }
+      html, body { background: var(--c-base); }
+    </style>
+    <script>
+      // 在应用 JS 执行前恢复主题,防止闪烁
+      (function () {
+        try {
+          var t = localStorage.getItem("mona-theme");
+          if (t === "light") document.documentElement.setAttribute("data-theme", "light");
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>

@@ -7,5 +7,5 @@ pub fn open() -> rusqlite::Result<Connection, AppError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).unwrap();
     }
-    Connection::open(path).map_err(|e| AppError::Database("打开数据库连接失败".to_string()))
+    Connection::open(path).map_err(|_| AppError::Database("打开数据库连接失败".to_string()))
 }

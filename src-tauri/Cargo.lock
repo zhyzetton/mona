@@ -2224,7 +2224,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mono"
+name = "mona"
 version = "0.1.0"
 dependencies = [
  "dirs",

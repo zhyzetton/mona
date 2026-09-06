@@ -21,6 +21,12 @@ export const api = {
   async playVideoWithPlayer(videoId: number, player: string): Promise<void> {
     return await invoke("play_video_with_player", { videoId, player });
   },
+  async getRecentPlayed(): Promise<Media[]> {
+    return await invoke<Media[]>("get_recent_played");
+  },
+  async recordPlay(mediaId: number): Promise<void> {
+    return await invoke("record_play", { mediaId });
+  },
 };
 
 // 把本地文件路径转成可在 webview 中加载的资源 URL

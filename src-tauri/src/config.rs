@@ -3,6 +3,7 @@ use serde;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::{fs, io};
+use crate::errors::AppError;
 
 #[derive(Debug, Deserialize, Clone, Default, Serialize)]
 pub struct Config {
@@ -26,13 +27,13 @@ impl Config {
         }
     }
 
-    pub fn save(&self) -> Result<(), String> {
+    pub fn save(&self) -> Result<(), AppError> {
         let path = config_file_path().unwrap();
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).unwrap()
         }
         let content = toml::to_string_pretty(self).unwrap();
-        fs::write(path, content).map_err(|e| e.to_string())
+        fs::write(path, content).map_err(|_| AppError::FileOperation("保存失败".to_string()))
     }
 }
 

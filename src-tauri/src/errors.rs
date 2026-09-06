@@ -2,10 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, serde::Serialize)]
 pub enum AppError {
-
-    #[error("创建文件失败: {0}")]
-    CreateFile(String),
-
     #[error("配置文件读取失败: {0}")]
     FileOperation(String),
     
@@ -15,7 +11,19 @@ pub enum AppError {
     #[error("扫描失败: {0}")]
     Scan(String),
 
+    #[error("获取媒体失败: {0}")]
+    GetMedia(String),
+
+    #[error("Serde失败: {0}")]
+    Serde(String),
+
     #[error("未知错误: {0}")]
     Other(String)
 
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        AppError::Database(e.to_string())
+    }
 }

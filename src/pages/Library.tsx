@@ -1,26 +1,64 @@
-import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Loader2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, Loader2, RefreshCw } from "lucide-react";
 import { api } from "../api";
-import { PosterCard } from "../components/MediaCard";
+import { POSTER_GRID, PosterCard } from "../components/MediaCard";
+import { toast } from "../toast";
 import type { Media } from "../types";
 
 const PAGE_SIZE = 30;
 
+// 各分类对应的 media_type;other 表示不属于任何已知类型的条目
+export type Category =
+  | "movie"
+  | "series"
+  | "anime"
+  | "variety"
+  | "documentary"
+  | "personal"
+  | "other";
+
+const CATEGORY_META: Record<Category, { label: string; mediaType: string | null }> = {
+  movie: { label: "电影", mediaType: "Movie" },
+  series: { label: "剧集", mediaType: "Series" },
+  anime: { label: "动画", mediaType: "Anime" },
+  variety: { label: "综艺", mediaType: "Variety" },
+  documentary: { label: "纪录片", mediaType: "Documentary" },
+  personal: { label: "个人", mediaType: "Personal" },
+  other: { label: "其他", mediaType: null },
+};
+
+const KNOWN_TYPES = new Set(
+  Object.values(CATEGORY_META)
+    .map((m) => m.mediaType)
+    .filter(Boolean),
+);
+
+export function isCategory(value: string): value is Category {
+  return value in CATEGORY_META;
+}
+
 export default function Library({
+  category,
   search,
   onOpen,
 }: {
+  category: Category;
   search: string;
   onOpen: (media: Media) => void;
 }) {
+  const meta = CATEGORY_META[category];
   const [media, setMedia] = useState<Media[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [filter, setFilter] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [tag, setTag] = useState<string | null>(null);
   // 增量渲染:当前渲染条数,滚动到底再翻倍
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // 切换分类时重置 tag 筛选
+  useEffect(() => {
+    setTag(null);
+  }, [category]);
 
   const load = async () => {
     setLoading(true);
@@ -42,18 +80,35 @@ export default function Library({
   const onScan = async () => {
     setScanning(true);
     setError(null);
-    setNotice(null);
     try {
       const added = await api.scanVideos();
-      setNotice(`扫描完成,新增 ${added} 个条目`);
+      toast.success(`扫描完成,新增 ${added} 个条目`);
       await load();
     } catch (e) {
       console.error(e);
-      setError(String(e));
+      toast.error(`扫描失败: ${String(e)}`);
     } finally {
       setScanning(false);
     }
   };
+
+  // 当前分类下出现过的标签,按条目数降序;忽略空标签(如根目录视频)
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const m of media) {
+      const matchType = meta.mediaType
+        ? m.media_type === meta.mediaType
+        : !KNOWN_TYPES.has(m.media_type);
+      if (!matchType) continue;
+      for (const t of m.tags ?? []) {
+        if (!t) continue;
+        counts.set(t, (counts.get(t) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([t]) => t);
+  }, [media, meta]);
 
   const filtered = media.filter((m) => {
     const kw = search.toLowerCase();
@@ -61,14 +116,18 @@ export default function Library({
       !kw ||
       m.title.toLowerCase().includes(kw) ||
       m.file_path.toLowerCase().includes(kw);
-    const matchType = filter === null || m.media_type === filter;
-    return matchKeyword && matchType;
+    // other = 没有类型,或类型不属于上面任何分类
+    const matchType = meta.mediaType
+      ? m.media_type === meta.mediaType
+      : !KNOWN_TYPES.has(m.media_type);
+    const matchTag = tag === null || (m.tags ?? []).includes(tag);
+    return matchKeyword && matchType && matchTag;
   });
 
   // 过滤条件/数据变化时重置增量渲染
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [search, filter, media]);
+  }, [search, category, tag, media]);
 
   // 哨兵:callback ref,节点一挂载就立即 observe,滚动接近底部自动加载下一批
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -101,106 +160,90 @@ export default function Library({
   const visible = filtered.slice(0, visibleCount);
 
   return (
-    <div className="px-8 py-6">
-      <div className="flex items-center justify-between mb-4">
+    <div className="px-8 lg:px-10 py-8">
+      <div className="flex items-center justify-between mb-5 animate-fade-in">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">媒体库</h1>
-          <p className="text-slate-400 text-sm">{media.length} 个条目</p>
+          <h1 className="text-3xl font-bold text-strong tracking-tight">{meta.label}</h1>
+          <p className="text-secondary text-sm mt-1">{filtered.length} 个条目</p>
         </div>
         <button
           onClick={onScan}
           disabled={scanning}
-          className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold text-sm transition-colors flex items-center gap-2"
+          className="px-5 py-2.5 rounded-full bg-orange-500 hover:bg-orange-400 active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-white font-semibold text-sm shadow-lg shadow-orange-500/25 transition-all flex items-center gap-2"
         >
           {scanning ? (
             <>
               <Loader2 size={16} className="animate-spin" /> 扫描中…
             </>
           ) : (
-            <>扫描</>
+            <>
+              <RefreshCw size={15} /> 扫描
+            </>
           )}
         </button>
       </div>
 
-      {/* 扫描通知 */}
-      {notice && (
-        <div className="mb-4 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-600 text-sm flex items-center justify-between">
-          <span>✓ {notice}</span>
-          <button
-            onClick={() => setNotice(null)}
-            className="text-green-400 hover:text-green-600"
-          >
-            <X size={16} />
-          </button>
+      {/* 标签筛选:与搜索叠加生效,当前分类没有标签时整行隐藏 */}
+      {allTags.length > 0 && (
+        <div className="flex flex-wrap w-fit max-w-full gap-1 p-1 mb-6 rounded-xl bg-tint/5 ring-1 ring-tint/10 animate-fade-in">
+          {[null, ...allTags].map((t) => {
+            const active = tag === t;
+            return (
+              <button
+                key={t ?? "__all"}
+                onClick={() => setTag(t)}
+                className={`px-4 py-1.5 rounded-full text-sm transition-all duration-200 ${
+                  active
+                    ? "bg-tint/10 text-strong font-medium ring-1 ring-tint/10"
+                    : "text-secondary hover:text-body"
+                }`}
+              >
+                {t ?? "全部"}
+              </button>
+            );
+          })}
         </div>
       )}
 
-      {/* 分类筛选 */}
-      <div className="flex gap-2 mb-6">
-        <button
-          onClick={() => setFilter(null)}
-          className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-            filter === null
-              ? "bg-orange-500 text-white font-semibold"
-              : "bg-white text-slate-600 hover:bg-slate-100"
-          }`}
-        >
-          全部
-        </button>
-        {[
-          { key: "Movie", label: "电影" },
-          { key: "Series", label: "剧集" },
-          { key: "Anime", label: "动画" },
-          { key: "Local", label: "本地" },
-        ].map((opt) => (
-          <button
-            key={opt.key}
-            onClick={() => setFilter(opt.key)}
-            className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-              filter === opt.key
-                ? "bg-orange-500 text-white font-semibold"
-                : "bg-white text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
       {error && (
-        <div className="text-red-500 text-sm mb-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+        <div className="text-err text-sm mb-6 bg-err/10 border border-err/20 rounded-xl px-4 py-3">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="flex justify-center py-24 text-slate-400">加载中…</div>
+        <div className="flex flex-col items-center justify-center py-24 gap-3 text-mute">
+          <Loader2 size={24} className="animate-spin" />
+          <span className="text-sm">加载中…</span>
+        </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
-          <FolderOpen size={56} className="text-slate-300 mb-6" />
-          <h2 className="text-xl font-semibold text-slate-800 mb-2">
-            {media.length === 0 ? "媒体库是空的" : "没有匹配的结果"}
+        <div className="flex flex-col items-center justify-center py-24 text-center animate-fade-in">
+          <div className="w-20 h-20 rounded-2xl bg-tint/5 ring-1 ring-tint/10 flex items-center justify-center mb-6">
+            <FolderOpen size={36} className="text-mute" />
+          </div>
+          <h2 className="text-xl font-semibold text-body mb-2">
+            {media.length === 0 ? "媒体库是空的" : `「${meta.label}」分类下还没有内容`}
           </h2>
-          <p className="text-slate-500 max-w-sm">
+          <p className="text-secondary max-w-sm text-sm leading-relaxed">
             {media.length === 0
               ? "到「设置」里添加一个本地视频目录,然后回来点「扫描」。"
-              : "换个关键词或筛选条件试试。"}
+              : "换个标签、分类或搜索关键词试试。"}
           </p>
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-4 gap-y-6">
-            {visible.map((m) => (
-              <PosterCard key={m.id} media={m} onClick={() => onOpen(m)} />
+          <div className={`${POSTER_GRID} animate-fade-in`}>
+            {visible.map((m, i) => (
+              <PosterCard key={m.id} media={m} index={i} onClick={() => onOpen(m)} />
             ))}
           </div>
           {/* 哨兵:始终在 DOM,滚动到接近底部时触发加载下一批 */}
           <div
             ref={setSentinel}
-            className="h-10 flex items-center justify-center mt-4"
+            className="h-10 flex items-center justify-center mt-6"
           >
             {visible.length < filtered.length && (
-              <Loader2 size={20} className="animate-spin text-slate-300" />
+              <Loader2 size={20} className="animate-spin text-mute" />
             )}
           </div>
         </>

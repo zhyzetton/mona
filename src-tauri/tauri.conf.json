@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mono",
+  "productName": "mona",
   "version": "0.1.0",
-  "identifier": "com.zetton.mono",
+  "identifier": "com.zetton.mona",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -16,7 +16,8 @@
         "width": 1280,
         "height": 800,
         "minWidth": 1000,
-        "minHeight": 650
+        "minHeight": 650,
+        "decorations": false
       }
     ],
     "security": {

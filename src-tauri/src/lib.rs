@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::media::model::Media;
-use tauri::{App, Manager};
+use tauri::{Manager};
 use crate::errors::AppError;
 
 pub mod config;
@@ -28,20 +28,33 @@ fn get_config() -> Config {
 }
 
 #[tauri::command]
-fn save_config(config: Config) -> Result<(), String> {
+fn save_config(config: Config) -> Result<(), AppError> {
     Config::save(&config)
 }
 
 #[tauri::command]
-fn play_video(video_id: i64) -> Result<(), String> {
-    let conn = database::connection::open().map_err(|e| e.to_string())?;
+fn play_video(video_id: i64) -> Result<(), AppError> {
+    let conn = database::connection::open()?;
 
-    let video = database::repository::get_by_id(&conn, video_id).map_err(|e| e.to_string())?;
+    let video = database::repository::get_media_by_id(&conn, video_id)?;
     let result = media::player::open_with_system_default(&video.file_path);
     match result {
         Ok(_) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(_) => Err(AppError::FileOperation("保存失败".to_string())),
     }
+}
+
+#[tauri::command]
+fn get_recent_played() -> Result<Vec<Media>, AppError> {
+    let conn = database::connection::open()?;
+    database::repository::get_recent_media(&conn, 5)
+}
+
+#[tauri::command]
+fn record_play(media_id: i64) -> Result<(), AppError> {
+    let conn = database::connection::open()?;
+    database::repository::record_play(&conn, media_id)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -53,7 +66,9 @@ pub fn run() {
             scan_videos,
             get_config,
             save_config,
-            play_video
+            play_video,
+            get_recent_played,
+            record_play
         ])
         .setup(|app| {
             let conn = database::connection::open()?;

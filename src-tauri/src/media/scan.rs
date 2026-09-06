@@ -1,6 +1,6 @@
 use crate::database::repository;
 use crate::errors::AppError;
-use crate::media::model::{Media, MediaType};
+use crate::media::model::{Media, MediaType, SourceType};
 use crate::{config, database};
 use image::imageops::FilterType;
 use image::GenericImageView;
@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "avi", "mov", "flv", "wmv", "ts"];
@@ -62,8 +63,8 @@ pub fn make_thumbnail(src: &Path) -> Result<(PathBuf, PathBuf), AppError> {
         .ok_or_else(|| AppError::FileOperation("打开海报路径失败".to_string()))?;
     let detail_img_dir = config::detail_img_dir()
         .ok_or_else(|| AppError::FileOperation("打开详情路径失败".to_string()))?;
-    fs::create_dir_all(&poster_dir).map_err(|e| AppError::CreateFile(e.to_string()))?;
-    fs::create_dir_all(&detail_img_dir).map_err(|e| AppError::CreateFile(e.to_string()))?;
+    fs::create_dir_all(&poster_dir).map_err(|e| AppError::FileOperation(e.to_string()))?;
+    fs::create_dir_all(&detail_img_dir).map_err(|e| AppError::FileOperation(e.to_string()))?;
 
     let poster_dest = poster_dir.join(format!("{}.jpg", hash));
     let detail_ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
@@ -91,7 +92,6 @@ fn format_bytes(bytes: u64) -> String {
     const GB: u64 = MB * 1024; // 1,073,741,824
 
     if bytes <= GB {
-        // 不超过 1G → 显示 MB
         let mb = bytes as f64 / MB as f64;
         format!("{:.2} MB", mb)
     } else {
@@ -125,6 +125,11 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
             .par_iter()
             .filter_map(|path| {
                 let file_path = path.to_string_lossy().to_string();
+                let tag = path
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .and_then(|name| name.to_str())
+                    .map(String::from);
                 // 现在 existing_paths 是 HashSet，查找 O(1)
                 if existing_paths.contains(&file_path) {
                     return None;
@@ -139,7 +144,7 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
                     Ok(metainfo) => metainfo,
                     Err(e) => {
                         eprintln!("获取元数据失败: {} -> {}", path.display(), e.to_string());
-                        return None
+                        return None;
                     }
                 };
 
@@ -161,12 +166,17 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
                     (None, None)
                 };
 
+                let added_at = std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()?
+                    .as_secs() as i64;
+
                 Some(Media {
                     id: None,
                     title,
                     year: None,
                     overview: None,
-                    media_type: MediaType::Local,
+                    media_type: Some(MediaType::Personal),
                     duration,
                     rating: None,
                     actors: vec![],
@@ -175,6 +185,9 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
                     file_path,
                     file_size,
                     resolution: metainfo.resolution,
+                    source: SourceType::Local,
+                    tags: vec![tag.unwrap_or_default()],
+                    added_at,
                 })
             })
             .collect();
@@ -205,14 +218,20 @@ pub async fn scan_job(dirs: Vec<PathBuf>) -> Result<i32, AppError> {
         }
         Ok(added)
     })
-    .await.map_err(|e|  AppError::Scan(e.to_string()));
+    .await
+    .map_err(|e| AppError::Scan(e.to_string()));
 
     result?
 }
 
 fn get_metainfo(path: &Path) -> Result<MetaInfo, AppError> {
-    let track_info = read_track(path)
-        .map_err(|e| AppError::FileOperation(format!("读取文件元数据失败: {} -> {}", path.display(), e.to_string())))?;
+    let track_info = read_track(path).map_err(|e| {
+        AppError::FileOperation(format!(
+            "读取文件元数据失败: {} -> {}",
+            path.display(),
+            e.to_string()
+        ))
+    })?;
     let duration_ms = track_info
         .get(TrackInfoTag::DurationMs)
         .and_then(|v| v.as_u64());

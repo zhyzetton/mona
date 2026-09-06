@@ -4,7 +4,7 @@ export interface Media {
   title: string;
   year: string | null;
   overview: string | null;
-  // Rust 端 MediaType 枚举序列化为字符串: "Movie" / "Series" / "Anime" / "Local"
+  // Rust 端 MediaType 枚举序列化为字符串: "Movie" / "Series" / "Anime" / "Personal"
   media_type: string;
   duration: string | null;
   rating: number | null;
@@ -17,6 +17,10 @@ export interface Media {
   file_size: string;
   // 分辨率(高度),如 1080
   resolution: number;
+  // 标签,本地视频为上一级目录名
+  tags: string[];
+  // 添加时间,Unix 秒
+  added_at: number;
 }
 
 // 与 Rust 端 config::Config 对应的类型
