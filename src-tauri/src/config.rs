@@ -10,6 +10,14 @@ pub struct Config {
     #[serde(default)]
     pub local_dirs: Vec<PathBuf>,
     pub player_name: Option<String>,
+    pub webdav_info: Option<WebDavInfo>,
+}
+
+#[derive(Debug, Deserialize, Clone, Serialize, Default)]
+pub struct WebDavInfo {
+    pub url: String,
+    pub username: String,
+    pub password: String,
 }
 
 impl Config {

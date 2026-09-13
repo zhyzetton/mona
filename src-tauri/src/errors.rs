@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Serde失败: {0}")]
     Serde(String),
 
+    #[error("WebDav操作失败: {0}")]
+    WebDav(String),
+
     #[error("未知错误: {0}")]
     Other(String)
 

@@ -1,0 +1,109 @@
+use std::path::{Path, PathBuf};
+use nom_exif::{read_track, TrackInfoTag};
+use crate::errors::AppError;
+use crate::media::scanner::{MetaInfo, IMAGE_EXTS};
+use std::fs;
+use image::GenericImageView;
+use sha2::{Digest, Sha256};
+use crate::config;
+use image::imageops::FilterType;
+
+pub fn make_thumbnail(src: &Path) -> Result<(PathBuf, PathBuf), AppError> {
+    let hash = hash_path(src);
+
+    let poster_dir = config::posters_dir()
+        .ok_or_else(|| AppError::FileOperation("打开海报路径失败".to_string()))?;
+    let detail_img_dir = config::detail_img_dir()
+        .ok_or_else(|| AppError::FileOperation("打开详情路径失败".to_string()))?;
+    fs::create_dir_all(&poster_dir).map_err(|e| AppError::FileOperation(e.to_string()))?;
+    fs::create_dir_all(&detail_img_dir).map_err(|e| AppError::FileOperation(e.to_string()))?;
+
+    let poster_dest = poster_dir.join(format!("{}.jpg", hash));
+    let detail_ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+    let detail_dest = detail_img_dir.join(format!("{}.{}", hash, detail_ext));
+    if poster_dest.exists() && detail_dest.exists() {
+        return Ok((poster_dest, detail_dest));
+    }
+    let img =
+        image::open(src).map_err(|e| AppError::FileOperation(format!("打开路径失败: {e}")))?;
+    let (w, h) = img.dimensions();
+    let scale = 300.0 / h as f32;
+    let new_w = (w as f32 * scale).round() as u32;
+    let scaled = img.resize(new_w, 300, FilterType::Lanczos3);
+    scaled
+        .save(&poster_dest)
+        .map_err(|e| AppError::FileOperation(format!("保存缩略图失败: {e}")))?;
+    fs::copy(src, &detail_dest)
+        .map_err(|e| AppError::FileOperation(format!("复制图片失败: {e}")))?;
+    Ok((poster_dest, detail_dest))
+}
+
+pub fn get_metainfo(path: &Path) -> Result<MetaInfo, AppError> {
+    let track_info = read_track(path).map_err(|e| {
+        AppError::FileOperation(format!(
+            "读取文件元数据失败: {} -> {}",
+            path.display(),
+            e.to_string()
+        ))
+    })?;
+    let duration_ms = track_info
+        .get(TrackInfoTag::DurationMs)
+        .and_then(|v| v.as_u64());
+    if duration_ms.is_none() {
+        eprintln!("文件 {} 中未找到时长信息", path.display())
+    }
+
+    let seconds = duration_ms.unwrap_or(0) / 1000;
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    let s = seconds % 60;
+    let duration = format!("{:02}:{:02}:{:02}", h, m, s);
+
+    let height = track_info
+        .get(TrackInfoTag::Height)
+        .and_then(|v| v.as_u32());
+    if height.is_none() {
+        eprintln!("文件 {} 未找到高度信息", path.display());
+    }
+    let file_size_byte = fs::metadata(path).ok().map(|m| m.len());
+    let file_size = format_bytes(file_size_byte.unwrap_or(0_u64));
+    Ok(MetaInfo {
+        duration,
+        resolution: height.unwrap_or(0_u32) as i32,
+        file_size,
+    })
+}
+
+pub fn find_poster(video_path: &Path) -> Option<PathBuf> {
+    let stem = video_path.file_stem()?;
+    let stem = stem.to_string_lossy();
+    for ext in IMAGE_EXTS {
+        let candidate = video_path.with_file_name(format!("{stem}.{ext}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+
+fn hash_path(path: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024; // 1,048,576
+    const GB: u64 = MB * 1024; // 1,073,741,824
+
+    if bytes <= GB {
+        let mb = bytes as f64 / MB as f64;
+        format!("{:.2} MB", mb)
+    } else {
+        // 超过 1G → 显示 GB
+        let gb = bytes as f64 / GB as f64;
+        format!("{:.2} GB", gb)
+    }
+}
