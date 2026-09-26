@@ -1,28 +1,26 @@
+use crate::database::repository::Repository;
+use crate::errors::AppError;
+use crate::media::model::{SourceType, Video};
+use crate::media::scanner::{utils, Scanner, VIDEO_EXTS};
+use async_trait::async_trait;
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use async_trait::async_trait;
-use rayon::prelude::*;
 use walkdir::WalkDir;
-use crate::database::repository::Repository;
-use crate::errors::AppError;
-use crate::media::model::{Media, MediaType, SourceType};
-use crate::media::scanner::{utils, Scanner, VIDEO_EXTS};
 
 pub struct LocalScanner {
-    pub local_dirs: Vec<PathBuf>
+    pub local_dirs: Vec<PathBuf>,
 }
 
 impl LocalScanner {
     pub fn new(local_dirs: Vec<PathBuf>) -> Self {
-        Self {
-            local_dirs
-        }
+        Self { local_dirs }
     }
 
+    // 获取视频文件夹中所有的视频路径
     fn scan_video_paths(dirs: &[PathBuf]) -> Vec<PathBuf> {
-        dirs
-            .iter()
+        dirs.iter()
             .flat_map(|dir| {
                 WalkDir::new(dir)
                     .into_iter()
@@ -35,10 +33,12 @@ impl LocalScanner {
                             .map(|ext| VIDEO_EXTS.contains(&ext.to_lowercase().as_str()))
                             .unwrap_or(false)
                     })
-            }).collect()
+            })
+            .collect()
     }
 
-    fn process_video(path: &Path, existing_paths: &HashSet<String>) -> Option<Media> {
+    // 从路径解析视频元数据，返回 Video 模型;如果路径已存在则跳过
+    fn process_video(path: &Path, existing_paths: &HashSet<String>) -> Option<Video> {
         let file_path = path.to_string_lossy().to_string();
         if existing_paths.contains(&file_path) {
             return None;
@@ -77,30 +77,25 @@ impl LocalScanner {
             .ok()?
             .as_secs() as i64;
 
-        Some(Media {
+        Some(Video {
             id: None,
-            title,
-            year: None,
-            overview: None,
-            media_type: Some(MediaType::Personal),
-            duration: metainfo.duration,
-            rating: None,
-            actors: vec![],
-            poster_path,
-            detail_img_path: detail_path,
-            file_path,
-            file_size: metainfo.file_size,
-            resolution: metainfo.resolution,
-            source: SourceType::Local,
-            tags: vec![tag],
-            added_at
+            library_id: ,
+            metadata_id: None,
+            name: "",
+            season: None,
+            episode: None,
+            path: "",
+            duration: None,
+            resolution: None,
+            file_size: 0,
+            added_at,
         })
     }
 }
 
 #[async_trait]
 impl Scanner for LocalScanner {
-    async fn scan(&self, repo: &Repository) -> Result<Vec<Media>, AppError> {
+    async fn scan(&self, repo: &Repository) -> Result<Vec<Video>, AppError> {
         // 1. 先在异步上下文里查询已存在的路径（repo 不进入闭包）
         let existing_paths: HashSet<String> = repo
             .get_all_paths()
@@ -112,26 +107,22 @@ impl Scanner for LocalScanner {
         let root_dirs = self.local_dirs.clone();
 
         // 3. spawn_blocking 闭包内不再触碰 self / repo
-        let result = tokio::task::spawn_blocking(
-            move || -> Result<Vec<Media>, AppError> {
-                let all_videos = LocalScanner::scan_video_paths(&root_dirs);
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<Video>, AppError> {
+            let all_videos = LocalScanner::scan_video_paths(&root_dirs);
 
-                if all_videos.is_empty() {
-                    return Ok(vec![]);
-                }
+            if all_videos.is_empty() {
+                return Ok(vec![]);
+            }
 
-                let results: Vec<Media> = all_videos
-                    .par_iter()
-                    .filter_map(|path| {
-                        LocalScanner::process_video(path, &existing_paths)
-                    })
-                    .collect();
+            let results: Vec<Video> = all_videos
+                .par_iter()
+                .filter_map(|path| LocalScanner::process_video(path, &existing_paths))
+                .collect();
 
-                Ok(results)
-            },
-        )
-            .await
-            .map_err(|e| AppError::Scan(e.to_string()))??;
+            Ok(results)
+        })
+        .await
+        .map_err(|e| AppError::Scan(e.to_string()))??;
 
         // 4. 回到异步上下文，写入数据库
         if !result.is_empty() {

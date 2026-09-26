@@ -26,7 +26,6 @@ toml = "0.9"
 walkdir = "2"
 sha2 = "0.10"
 nom-exif = "3.6"
-rusqlite = { version = "0.40.1", features = ["bundled"] }
 rayon = "1.7"
 image = {version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 dirs = "6"
@@ -35,3 +34,5 @@ thiserror = "2.0"
 async-trait = "0.1"
 roxmltree = "0.20"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
+sea-orm = { version = "2.0.3", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "sqlite-use-returning-for-3_35"] }
+sea-orm-migration = { version = "2.0.3", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }

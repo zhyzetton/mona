@@ -25,8 +25,8 @@ pub enum AppError {
 
 }
 
-impl From<rusqlite::Error> for AppError {
-    fn from(e: rusqlite::Error) -> Self {
+impl From<sea_orm::DbErr> for AppError {
+    fn from(e: sea_orm::DbErr) -> Self {
         AppError::Database(e.to_string())
     }
 }
