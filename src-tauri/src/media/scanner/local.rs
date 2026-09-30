@@ -1,135 +1,69 @@
+use crate::database::model::library;
+use crate::database::model::{MediaType, SourceType};
 use crate::database::repository::Repository;
 use crate::errors::AppError;
-use crate::media::model::{SourceType, Video};
 use crate::media::scanner::{utils, Scanner, VIDEO_EXTS};
 use async_trait::async_trait;
-use rayon::prelude::*;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
-use walkdir::WalkDir;
 
 pub struct LocalScanner {
-    pub local_dirs: Vec<PathBuf>,
+    pub library_list: Vec<library::ActiveModel>,
 }
 
 impl LocalScanner {
-    pub fn new(local_dirs: Vec<PathBuf>) -> Self {
-        Self { local_dirs }
+    pub fn new(library_list: Vec<library::ActiveModel>) -> Self {
+        Self { library_list }
     }
 
-    // 获取视频文件夹中所有的视频路径
-    fn scan_video_paths(dirs: &[PathBuf]) -> Vec<PathBuf> {
-        dirs.iter()
-            .flat_map(|dir| {
-                WalkDir::new(dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .map(|e| e.path().to_path_buf())
-                    .filter(|p| {
-                        p.extension()
-                            .and_then(|ext| ext.to_str())
-                            .map(|ext| VIDEO_EXTS.contains(&ext.to_lowercase().as_str()))
-                            .unwrap_or(false)
-                    })
-            })
-            .collect()
-    }
-
-    // 从路径解析视频元数据，返回 Video 模型;如果路径已存在则跳过
-    fn process_video(path: &Path, existing_paths: &HashSet<String>) -> Option<Video> {
-        let file_path = path.to_string_lossy().to_string();
-        if existing_paths.contains(&file_path) {
-            return None;
+    /// 配置文件里的目录直接当本地库:名字取目录名,分类先用 Other
+    /// (以后做了"添加媒体库"界面,就用 library::ActiveModel::new 自己传)
+    pub fn from_dirs(dirs: Vec<PathBuf>) -> Self {
+        Self {
+            library_list: dirs
+                .into_iter()
+                .map(|dir| {
+                    let name = dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| dir.to_string_lossy().into_owned());
+                    library::ActiveModel::new(
+                        SourceType::Local,
+                        name,
+                        MediaType::Other,
+                        dir.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
         }
-        let metainfo = utils::get_metainfo(path).ok()?;
-        let title = path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .replace('_', " ");
-
-        let (poster_path, detail_path) = if let Some(src) = utils::find_poster(path) {
-            match utils::make_thumbnail(&src) {
-                Ok((poster_dest, detail_dest)) => (
-                    Some(poster_dest.to_string_lossy().to_string()),
-                    Some(detail_dest.to_string_lossy().to_string()),
-                ),
-                Err(e) => {
-                    eprintln!("生成缩略图失败： {}: {e}", src.display());
-                    (None, None)
-                }
+    }
+    /// 校验配置里的每个库:根目录必须存在;没入库的新库先写进数据库
+    pub async fn check_library(&self, repo: &Repository) -> Result<(), AppError> {
+        for library in &self.library_list {
+            // ActiveModel 的字段是 ActiveValue 而不是裸 String,as_ref() 拿回 &String
+            let root_path = library.root_path.as_ref();
+            if !Path::new(root_path).exists() {
+                return Err(AppError::Other(format!(
+                    "Library root path not found: {root_path}"
+                )));
             }
-        } else {
-            (None, None)
-        };
-
-        let tag = path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .map(String::from)
-            .unwrap_or_default();
-
-        let added_at = std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_secs() as i64;
-
-        Some(Video {
-            id: None,
-            library_id: ,
-            metadata_id: None,
-            name: "",
-            season: None,
-            episode: None,
-            path: "",
-            duration: None,
-            resolution: None,
-            file_size: 0,
-            added_at,
-        })
+            // 已入库的不动,避免用配置默认值覆盖数据库里已有的设置
+            if repo.get_library_by_root_path(root_path).await?.is_none() {
+                repo.insert_library(library.clone()).await?;
+            }
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
 impl Scanner for LocalScanner {
-    async fn scan(&self, repo: &Repository) -> Result<Vec<Video>, AppError> {
-        // 1. 先在异步上下文里查询已存在的路径（repo 不进入闭包）
-        let existing_paths: HashSet<String> = repo
-            .get_all_paths()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+    async fn scan(&self, repo: &Repository) -> Result<(), AppError> {
+        // 先校验根目录并把新库写进数据库,之后用 repo.get_enabled_libraries()
+        // 拿带真实 id 的 library::Model 去挂 item / file
+        self.check_library(repo).await?;
 
-        // 2. 克隆需要的字段，移入阻塞闭包
-        let root_dirs = self.local_dirs.clone();
-
-        // 3. spawn_blocking 闭包内不再触碰 self / repo
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<Video>, AppError> {
-            let all_videos = LocalScanner::scan_video_paths(&root_dirs);
-
-            if all_videos.is_empty() {
-                return Ok(vec![]);
-            }
-
-            let results: Vec<Video> = all_videos
-                .par_iter()
-                .filter_map(|path| LocalScanner::process_video(path, &existing_paths))
-                .collect();
-
-            Ok(results)
-        })
-        .await
-        .map_err(|e| AppError::Scan(e.to_string()))??;
-
-        // 4. 回到异步上下文，写入数据库
-        if !result.is_empty() {
-            repo.insert_media_batch(&result)?;
-        }
-
-        Ok(result)
+        // TODO: 逐库 walkdir,和 repo.get_relative_paths() 对比去重后 insert_item_with_files
+        Ok(())
     }
 
     fn name(&self) -> &'static str {

@@ -129,7 +129,7 @@ pub mod item {
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
     #[sea_orm(table_name = "item")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: i64,
         pub library_id: i64,
         pub kind: KindType,
@@ -211,7 +211,7 @@ pub mod file {
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize)]
     #[sea_orm(table_name = "file")]
     pub struct Model {
-        #[sea_orm(primary_key)]
+        #[sea_orm(primary_key, auto_increment = false)]
         pub id: i64,
         pub item_id: i64,
         pub relative_path: String,

@@ -36,10 +36,11 @@ async fn get_video_detail(item_id: i64) -> Result<(item::Model, Vec<database::mo
 #[tauri::command]
 async fn scan_videos() -> Result<i32, AppError> {
     let repo = Repository::new(database::connection::open().await?);
-    let added = LocalScanner::new(Config::load().local_dirs)
+    LocalScanner::from_dirs(Config::load().local_dirs)
         .scan(&repo)
         .await?;
-    Ok(added.len() as i32)
+    // TODO: scan 实现后返回真正的新增数量
+    Ok(0)
 }
 
 #[tauri::command]

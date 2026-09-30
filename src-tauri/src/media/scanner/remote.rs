@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use crate::database::repository::Repository;
 use crate::errors::AppError;
-use crate::media::model::Media;
 use crate::media::scanner::Scanner;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -34,8 +33,8 @@ impl RemoteScanner {
 
 #[async_trait]
 impl Scanner for RemoteScanner {
-    async fn scan(&self, repo: &Repository) -> Result<Vec<Media>, AppError> {
-        Ok(vec![])
+    async fn scan(&self, repo: &Repository) -> Result<(), AppError> {
+        Ok(())
     }
 
     fn name(&self) -> &'static str {

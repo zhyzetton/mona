@@ -21,6 +21,27 @@ impl Repository {
     }
 
     // ---------- library ----------
+    //
+    pub async fn insert_library(
+        &self,
+        model: library::ActiveModel,
+    ) -> Result<library::Model, AppError> {
+        Ok(library::Entity::insert(model)
+            .on_conflict(
+                OnConflict::column(library::Column::RootPath)
+                    .update_columns([
+                        library::Column::Source,
+                        library::Column::Name,
+                        library::Column::MediaType,
+                        library::Column::Scrape,
+                        library::Column::Private,
+                        library::Column::DisplayOrder,
+                    ])
+                    .to_owned(),
+            )
+            .exec_with_returning(&self.db)
+            .await?)
+    }
 
     /// 按 root_path 去重:已存在则刷新配置,返回库记录
     pub async fn upsert_library(
