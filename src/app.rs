@@ -2,11 +2,14 @@ use crate::views::sidebar::{MenuItem, SideMenu, SideMenuState};
 use gpui_kit::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div,
 };
+use sqlx::SqlitePool;
 use crate::views::home::HomePage;
 use crate::views::library::LibraryPage;
 use crate::views::setting::SettingPage;
 
 pub struct MonaApp {
+    pool_handle: SqlitePool,
+    rt_handle: tokio::runtime::Handle,
     side_menu: Entity<SideMenu>,
     menu_state: Entity<SideMenuState>,
     home_page: Entity<HomePage>,
@@ -31,7 +34,7 @@ impl Render for MonaApp {
     }
 }
 impl MonaApp {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>, pool_handle: SqlitePool, rt_handle: tokio::runtime::Handle) -> Self {
         let state = cx.new(|_| SideMenuState {
             current_menu: MenuItem::Home
         });
@@ -39,6 +42,8 @@ impl MonaApp {
             cx.notify()
         }).detach();
         Self {
+            pool_handle,
+            rt_handle,
             side_menu: cx.new(|inner_cx| SideMenu::new(state.clone(), inner_cx)),
             menu_state: state,
             home_page: cx.new(|_| HomePage),
